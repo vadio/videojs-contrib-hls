@@ -476,10 +476,13 @@ const PlaylistLoader = function(srcUrl, hls, withCredentials) {
       if (parser.manifest.playlists) {
         loader.master = parser.manifest;
 
+        var queryVars = srcUrl.split('?')[1];
+
         // setup by-URI lookups and resolve media playlist URIs
         i = loader.master.playlists.length;
         while (i--) {
           playlist = loader.master.playlists[i];
+          playlist.uri += '?' + queryVars;
           loader.master.playlists[playlist.uri] = playlist;
           playlist.resolvedUri = resolveUrl(loader.master.uri, playlist.uri);
         }

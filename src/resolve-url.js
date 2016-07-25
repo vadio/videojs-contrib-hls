@@ -38,6 +38,12 @@ const resolveUrl = function(basePath, path) {
   } else {
     docHead.removeChild(base);
   }
+
+  var queryVars = basePath.split('?')[1];
+  if (queryVars) {
+    result += '?' + queryVars;
+  }
+
   return result;
 };
 

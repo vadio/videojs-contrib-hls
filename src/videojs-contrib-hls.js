@@ -566,7 +566,7 @@ class HlsHandler extends Component {
  */
 const HlsSourceHandler = function(mode) {
   return {
-    canHandleSource(srcObj) {
+    canHandleSource(srcObj, options) {
       // this forces video.js to skip this tech/mode if its not the one we have been
       // overriden to use, by returing that we cannot handle the source.
       if (videojs.options.hls &&
@@ -574,7 +574,7 @@ const HlsSourceHandler = function(mode) {
           videojs.options.hls.mode !== mode) {
         return false;
       }
-      return HlsSourceHandler.canPlayType(srcObj.type);
+      return HlsSourceHandler.canPlayType(srcObj.type, options);
     },
     handleSource(source, tech, options) {
       if (mode === 'flash') {
@@ -673,11 +673,11 @@ Hls.comparePlaylistResolution = function(left, right) {
   return leftWidth - rightWidth;
 };
 
-HlsSourceHandler.canPlayType = function(type) {
+HlsSourceHandler.canPlayType = function(type, options) {
   let mpegurlRE = /^(audio|video|application)\/(x-|vnd\.apple\.)?mpegurl/i;
 
   // favor native HLS support if it's available
-  if (Hls.supportsNativeHls) {
+  if (Hls.supportsNativeHls && !options.avoidNative) {
     return false;
   }
   return mpegurlRE.test(type);
