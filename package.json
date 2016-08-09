@@ -1,6 +1,6 @@
 {
   "name": "videojs-contrib-hls",
-  "version": "3.2.0",
+  "version": "3.4.0",
   "description": "Play back HLS with video.js, even where it's not natively supported",
   "main": "es5/videojs-contrib-hls.js",
   "engines": {
@@ -121,7 +121,7 @@
     "shelljs": "^0.5.3",
     "sinon": "1.10.2",
     "uglify-js": "^2.5.0",
-    "videojs-standard": "^4.0.0",
+    "videojs-standard": "^4.0.3",
     "watchify": "^3.6.0"
   }
 }

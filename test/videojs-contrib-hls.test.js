@@ -2016,7 +2016,9 @@ QUnit.test('cleans up the buffer when loading live segments', function() {
   QUnit.strictEqual(this.requests[0].url, 'liveStart30sBefore.m3u8',
                     'master playlist requested');
   QUnit.equal(removes.length, 1, 'remove called');
-  QUnit.deepEqual(removes[0], [0, seekable.start(0)],
+  // segment-loader removes up to the segment prior to seekable.start
+  // to avoid crossing segment-boundaries
+  QUnit.deepEqual(removes[0], [0, seekable.start(0) - 10],
                   'remove called with the right range');
 
   // verify stats
@@ -2071,7 +2073,7 @@ QUnit.test('cleans up the buffer based on currentTime when loading a live segmen
 
   QUnit.strictEqual(this.requests[0].url, 'liveStart30sBefore.m3u8', 'master playlist requested');
   QUnit.equal(removes.length, 1, 'remove called');
-  QUnit.deepEqual(removes[0], [0, 80 - 60], 'remove called with the right range');
+  QUnit.deepEqual(removes[0], [0, 80 - 70], 'remove called with the right range');
 
   // verify stats
   QUnit.equal(this.player.tech_.hls.stats.mediaBytesTransferred, 16, '16 bytes');
@@ -2273,6 +2275,34 @@ QUnit.test('Allows overriding the global beforeRequest function', function() {
   // verify stats
   QUnit.equal(this.player.tech_.hls.stats.mediaBytesTransferred, 16, 'seen above');
   QUnit.equal(this.player.tech_.hls.stats.mediaRequests, 1, 'one segment request');
+});
+
+QUnit.test('passes useCueTags hls option to master playlist controller', function() {
+  this.player.src({
+    src: 'master.m3u8',
+    type: 'application/vnd.apple.mpegurl'
+  });
+
+  QUnit.ok(!this.player.tech_.hls.masterPlaylistController_.useCueTags_,
+           'useCueTags is falsy by default');
+
+  let origHlsOptions = videojs.options.hls;
+
+  videojs.options.hls = {
+    useCueTags: true
+  };
+
+  this.player.dispose();
+  this.player = createPlayer();
+  this.player.src({
+    src: 'http://example.com/media.m3u8',
+    type: 'application/vnd.apple.mpegurl'
+  });
+
+  QUnit.ok(this.player.tech_.hls.masterPlaylistController_.useCueTags_,
+           'useCueTags passed to master playlist controller');
+
+  videojs.options.hls = origHlsOptions;
 });
 
 QUnit.module('HLS Integration', {
