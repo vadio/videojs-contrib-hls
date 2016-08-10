@@ -189,8 +189,8 @@ export default class SegmentLoader extends videojs.EventTarget {
 
     // don't wait for buffer check timeouts to begin fetching the
     // next segment
+    this.state = 'READY';
     if (!this.paused()) {
-      this.state = 'READY';
       this.fillBuffer_();
     }
   }
