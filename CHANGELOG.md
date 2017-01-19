@@ -2,6 +2,136 @@ CHANGELOG
 =========
 
 --------------------
+## 4.0.3 (2016-12-23)
+* Fix a segment hop in live [#928](https://github.com/videojs/videojs-contrib-hls/pull/928)
+* Map legacy AVC codecs to their modern equivalents when excluding incompatible playlists [#940](https://github.com/videojs/videojs-contrib-hls/pull/940)
+* Update video.js to 5.15.1 [#941](https://github.com/videojs/videojs-contrib-hls/pull/941)
+
+--------------------
+## 4.0.2 (2016-11-29)
+* Fix excessive segment loads on seeks [#925](https://github.com/videojs/videojs-contrib-hls/pull/925)
+  * Fixed a few cases where seeking caused the player to load too many segments
+
+--------------------
+## 4.0.1 (2016-11-23)
+* Revert "Upgrade aes-decrypter to use webcrypto for HLSe decryption where available. (#777)" [#922](https://github.com/videojs/videojs-contrib-hls/pull/922)
+  * WebCrypto's subtle-crypto was failing to decrypt segments that worked previously with the JavaScript-only implementation
+
+--------------------
+## 4.0.0 (2016-11-21)
+* Simplified the algorithm at the heart of SegmentLoader as much as possible [#875](https://github.com/videojs/videojs-contrib-hls/pull/875)
+  * Introduced the concept of sync-points to help associate currentTime with segments across variants
+  * More information available at: https://www.brightcove.com/en/blog/2016/10/improving-hls-playback
+* Updated videojs-contrib-media-sources to 4.1.2
+  * Start using remote TextTracks because they can be properly removed [#118](https://github.com/videojs/videojs-contrib-media-sources/pull/118)
+  * Handle remove cues from track properly if cues is null [#112](https://github.com/videojs/videojs-contrib-media-sources/pull/112)
+* Updated mux.js to 3.0.3
+  * Stop applying the compositionTimestamp of the first frame to the baseMediaDecodeTime for the fragment [#108](https://github.com/videojs/mux.js/pull/108)
+  * Fix coalesce stream to account for missing audio data in pending tracks [#125](https://github.com/videojs/mux.js/pull/125)
+* Updated aes-decrypter to [2.0.0](https://github.com/videojs/aes-decrypter/blob/master/CHANGELOG.md#200-2016-11-15)
+  * Use webcrypto for aes-cbc segment decryption when supported [#4](https://github.com/videojs/aes-decrypter/pull/4)
+
+--------------------
+## 3.6.13 (2016-11-17)
+* Added the concept of systemBandwidth - a measure of the bandwidth (in mb/s) of the entire system from download through transmuxing and appending data to a flash or native media source
+  * Adaptive bitrate selection is now based on the performance of the entire system
+
+--------------------
+## 3.6.12 (2016-11-14)
+* Changed resolveUrl to use javascript only
+
+--------------------
+## 3.6.11 (2016-11-11)
+* Updated the reloadSourceOnErrors plugin:
+  * Don't try to set the source if getSource returns undefined or null
+* resolve-url.js now uses an iframe to contain the base and anchor elements used to resolve relateive urls
+
+--------------------
+## 3.6.10 (2016-11-10)
+* Updated the reloadSourceOnErrors plugin:
+  * Option to pass a `getSource` function that can be used to provide a new source to load on error
+  * Added the ability to override the default minimum time between errors in seconds
+  * Plugin now cleans up event bindings when initialized multiple times
+* Fix trimBuffer to compare correct segments and correctly trim in the live case
+
+--------------------
+## 3.6.9 (2016-11-09)
+* Add a plugin that can be used to automatically reload a source if an
+  error occurs
+* Fix an error when checking if the lowest quality level is currently
+  in use
+
+--------------------
+## 3.6.8 (2016-11-09)
+* Enhance gap skipper to seek back into the live window if playback
+  slips out of it. Renamed GapSkipper to PlaybackWatcher.
+
+--------------------
+## 3.6.7 (2016-11-03)
+* Update videojs-contrib-media-sources to 4.0.5
+  * Fix an issue with ID3 and 608 cue translation
+
+--------------------
+## 3.6.6 (2016-10-21)
+* Use setTimeout in gap skipper instead of relying on timeupdate events
+* Updated videojs-contrib-media-sources to 4.0.4
+  * Append init segment to video buffer for every segmentw
+
+--------------------
+## 3.6.4 (2016-10-18)
+* Fix 'ended' event not firing after replay
+* Updated videojs-contrib-media-sources to 4.0.2
+  * Only trim FLV tags when seeking to prevent triming I frames
+  * Updated Mux.js to 3.0.2
+    * Set h264Frame to null after we finish the frame
+
+--------------------
+## 3.6.3 (2016-10-18)
+* Update videojs-contrib-media-sources to 4.0.1
+  * Fix flash fallback
+
+--------------------
+## 3.6.2 (2016-10-17)
+* Update videojs-contrib-media-sources to 4.0.0
+  * Append init segment data on audio track changes
+  * Normalize ID3 behavior to follow Safari's implementation
+
+--------------------
+## 3.6.1 (2016-10-13)
+* Allow for initial bandwidth option of 0
+* Added support for MAAT in Firefox 49
+* Corrected deprecation warning for `player.hls`
+
+--------------------
+## 3.6.0 (2016-09-27)
+* Updated Mux.js to 2.5.0
+    * Added support for generating version 1 TFDT boxes
+    * Added TS inspector
+* Added bundle-collapser to create smaller dist files
+* Added fMP4 support
+* Fixed a bug that resulted in us loading the first segment on a live stream
+
+--------------------
+## 3.5.3 (2016-08-24)
+* Updated videojs-contrib-mediasources to 3.1.5
+  * Updated Mux.js to 2.4.2
+    * Fixed caption-packet sorting to be stable on Chromium
+
+--------------------
+## 3.5.2 (2016-08-17)
+* Changes to the underflow-detection in the gap-skipper to remove restrictions on the size of the gaps it is able to skip
+
+--------------------
+## 3.5.1 (2016-08-16)
+* Fixes an issue where playback can stall when going in/out of fullscreen
+
+--------------------
+## 3.5.0 (2016-08-15)
+* Updated support for #ext-x-cue-out, #ext-x-cue-in, and #ext-x-cue-out-cont to create a single cue spanning the range of time covered by the ad break
+* Updated to videojs-media-sources 3.1.4
+  * Increased the values of the FlashConstants to push more data into flash per chunk-interval
+
+--------------------
 ## 3.4.0 (2016-07-29)
 * Added support for #ext-x-cue-out, #ext-x-cue-in, and #ext-x-cue-out-cont via a special TextTrack
 * Added the ability to skip gaps caused by video underflow behavior in Chrome

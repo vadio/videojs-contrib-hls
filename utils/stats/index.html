@@ -14,7 +14,7 @@
 
   <!-- player stats visualization -->
   <link href="stats.css" rel="stylesheet">
-  <script src="../switcher/js/vendor/d3.min.js"></script>
+  <script src="/node_modules/d3/d3.min.js"></script>
 
   <style>
     body {
@@ -77,6 +77,12 @@
       Autoplay:
       <input type="radio" name="autoplay" value="on"> On
       <input type="radio" name="autoplay" value="off" checked> Off
+    </label>
+    <br>
+    <label>
+      Override Native:
+      <input type="radio" name="override-native" value="on"> On
+      <input type="radio" name="override-native" value="off" checked> Off
     </label>
 
     <br>
@@ -157,6 +163,7 @@
       var techRadios = document.getElementsByName('technology-mode');
       var techMode = getCheckedValue('technology-mode') || 'auto';
       var autoplay = getCheckedValue('autoplay') || 'off';
+      var overrideNative = getCheckedValue('override-native') || 'off';
       var captionTrack = document.getElementById('caption-track').value || "";
       var url = document.getElementById('url-to-load').value || "";
       var options = {};
@@ -180,6 +187,9 @@
           options.autoplay = false;
         }
       }
+
+      videojs.options.hls.overrideNative = overrideNative === 'on';
+
       var type = document.getElementById('url-content-type').value;
       // use the form data to add a src to the player
       try {
@@ -210,12 +220,6 @@
 
     function setup(player) {
       player.ready(function() {
-
-        // ------------
-        // Audio Track Switcher
-        // ------------
-
-        player.controlBar.addChild('AudioTrackButton', {}, 13);
 
         // ------------
         // Player Stats

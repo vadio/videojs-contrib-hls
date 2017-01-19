@@ -13,38 +13,12 @@ import utils from './bin-utils';
 import {MediaSource, URL} from 'videojs-contrib-media-sources';
 import m3u8 from 'm3u8-parser';
 import videojs from 'video.js';
-import MasterPlaylistController from './master-playlist-controller';
+import { MasterPlaylistController } from './master-playlist-controller';
 import Config from './config';
 import renditionSelectionMixin from './rendition-mixin';
-import GapSkipper from './gap-skipper';
 import window from 'global/window';
-
-/**
- * determine if an object a is differnt from
- * and object b. both only having one dimensional
- * properties
- *
- * @param {Object} a object one
- * @param {Object} b object two
- * @return {Boolean} if the object has changed or not
- */
-const objectChanged = function(a, b) {
-  if (typeof a !== typeof b) {
-    return true;
-  }
-  // if we have a different number of elements
-  // something has changed
-  if (Object.keys(a).length !== Object.keys(b).length) {
-    return true;
-  }
-
-  for (let prop in a) {
-    if (!b[prop] || a[prop] !== b[prop]) {
-      return true;
-    }
-  }
-  return false;
-};
+import PlaybackWatcher from './playback-watcher';
+import reloadSourceOnError from './reload-source-on-error';
 
 const Hls = {
   PlaylistLoader,
@@ -148,7 +122,7 @@ Hls.STANDARD_PLAYLIST_SELECTOR = function() {
 
     effectiveBitrate = variant.attributes.BANDWIDTH * BANDWIDTH_VARIANCE;
 
-    if (effectiveBitrate < this.bandwidth) {
+    if (effectiveBitrate < this.systemBandwidth) {
       bandwidthPlaylists.push(variant);
 
       // since the playlists are sorted in ascending order by
@@ -271,6 +245,26 @@ Hls.isSupported = function() {
                           'your player\'s techOrder.');
 };
 
+const USER_AGENT = window.navigator && window.navigator.userAgent || '';
+
+/**
+ * Determines whether the browser supports a change in the audio configuration
+ * during playback. Currently only Firefox 48 and below do not support this.
+ * window.isSecureContext is a propterty that was added to window in firefox 49,
+ * so we can use it to detect Firefox 49+.
+ *
+ * @return {Boolean} Whether the browser supports audio config change during playback
+ */
+Hls.supportsAudioInfoChange_ = function() {
+  if (videojs.browser.IS_FIREFOX) {
+    let firefoxVersionMap = (/Firefox\/([\d.]+)/i).exec(USER_AGENT);
+    let version = parseInt(firefoxVersionMap[1], 10);
+
+    return version >= 49;
+  }
+  return true;
+};
+
 const Component = videojs.getComponent('Component');
 
 /**
@@ -295,7 +289,7 @@ class HlsHandler extends Component {
       if (!_player.hasOwnProperty('hls')) {
         Object.defineProperty(_player, 'hls', {
           get: () => {
-            videojs.log.warn('player.hls is deprecated. Use player.tech.hls instead.');
+            videojs.log.warn('player.hls is deprecated. Use player.tech_.hls instead.');
             return this;
           }
         });
@@ -305,6 +299,7 @@ class HlsHandler extends Component {
     this.tech_ = tech;
     this.source_ = source;
     this.stats = {};
+    this.ignoreNextSeekingEvent_ = false;
 
     // handle global & Source Handler level options
     this.options_ = videojs.mergeOptions(videojs.options.hls || {}, options.hls);
@@ -327,6 +322,11 @@ class HlsHandler extends Component {
     });
 
     this.on(this.tech_, 'seeking', function() {
+      if (this.ignoreNextSeekingEvent_) {
+        this.ignoreNextSeekingEvent_ = false;
+        return;
+      }
+
       this.setCurrentTime(this.tech_.currentTime());
     });
     this.on(this.tech_, 'error', function() {
@@ -336,7 +336,7 @@ class HlsHandler extends Component {
     });
 
     this.audioTrackChange_ = () => {
-      this.masterPlaylistController_.useAudio();
+      this.masterPlaylistController_.setupAudio();
     };
 
     this.on(this.tech_, 'play', this.play);
@@ -349,7 +349,9 @@ class HlsHandler extends Component {
     // start playlist selection at a reasonable bandwidth for
     // broadband internet
     // 0.5 MB/s
-    this.options_.bandwidth = this.options_.bandwidth || 4194304;
+    if (typeof this.options_.bandwidth !== 'number') {
+      this.options_.bandwidth = 4194304;
+    }
 
     // grab options passed to player.src
     ['withCredentials', 'bandwidth'].forEach((option) => {
@@ -376,7 +378,10 @@ class HlsHandler extends Component {
     this.options_.tech = this.tech_;
     this.options_.externHls = Hls;
     this.masterPlaylistController_ = new MasterPlaylistController(this.options_);
-    this.gapSkipper_ = new GapSkipper(this.options_);
+    this.playbackWatcher_ = new PlaybackWatcher(
+      videojs.mergeOptions(this.options_, {
+        seekable: () => this.seekable()
+      }));
 
     // `this` in selectPlaylist should be the HlsHandler for backwards
     // compatibility with < v2
@@ -400,12 +405,55 @@ class HlsHandler extends Component {
           this.masterPlaylistController_.selectPlaylist = selectPlaylist.bind(this);
         }
       },
+      throughput: {
+        get() {
+          return this.masterPlaylistController_.mainSegmentLoader_.throughput.rate;
+        },
+        set(throughput) {
+          this.masterPlaylistController_.mainSegmentLoader_.throughput.rate = throughput;
+          // By setting `count` to 1 the throughput value becomes the starting value
+          // for the cumulative average
+          this.masterPlaylistController_.mainSegmentLoader_.throughput.count = 1;
+        }
+      },
       bandwidth: {
         get() {
           return this.masterPlaylistController_.mainSegmentLoader_.bandwidth;
         },
         set(bandwidth) {
           this.masterPlaylistController_.mainSegmentLoader_.bandwidth = bandwidth;
+          // setting the bandwidth manually resets the throughput counter
+          // `count` is set to zero that current value of `rate` isn't included
+          // in the cumulative average
+          this.masterPlaylistController_.mainSegmentLoader_.throughput = {rate: 0, count: 0};
+        }
+      },
+      /**
+       * `systemBandwidth` is a combination of two serial processes bit-rates. The first
+       * is the network bitrate provided by `bandwidth` and the second is the bitrate of
+       * the entire process after that - decryption, transmuxing, and appending - provided
+       * by `throughput`.
+       *
+       * Since the two process are serial, the overall system bandwidth is given by:
+       *   sysBandwidth = 1 / (1 / bandwidth + 1 / throughput)
+       */
+      systemBandwidth: {
+        get() {
+          let invBandwidth = 1 / (this.bandwidth || 1);
+          let invThroughput;
+
+          if (this.throughput > 0) {
+            invThroughput = 1 / this.throughput;
+          } else {
+            invThroughput = 0;
+          }
+
+          let systemBitrate = Math.floor(1 / (invBandwidth + invThroughput));
+
+          return systemBitrate;
+        },
+        set() {
+          videojs.log.error('The "systemBandwidth" property is read-only');
         }
       }
     });
@@ -426,6 +474,10 @@ class HlsHandler extends Component {
       mediaBytesTransferred: {
         get: () => this.masterPlaylistController_.mediaBytesTransferred_() || 0,
         enumerable: true
+      },
+      mediaSecondsLoaded: {
+        get: () => this.masterPlaylistController_.mediaSecondsLoaded_() || 0,
+        enumerable: true
       }
     });
 
@@ -436,66 +488,29 @@ class HlsHandler extends Component {
       this.tech_.audioTracks().addEventListener('change', this.audioTrackChange_);
     });
 
-    this.masterPlaylistController_.on('audioinfo', (e) => {
-      if (!videojs.browser.IS_FIREFOX ||
-          !this.audioInfo_ ||
-          !objectChanged(this.audioInfo_, e.info)) {
-        this.audioInfo_ = e.info;
-        return;
-      }
-
-      let error = 'had different audio properties (channels, sample rate, etc.) ' +
-                  'or changed in some other way.  This behavior is currently ' +
-                  'unsupported in Firefox due to an issue: \n\n' +
-                  'https://bugzilla.mozilla.org/show_bug.cgi?id=1247138\n\n';
-
-      let enabledTrack;
-      let defaultTrack;
-
-      this.masterPlaylistController_.audioTracks_.forEach((t) => {
-        if (!defaultTrack && t.default) {
-          defaultTrack = t;
-        }
-
-        if (!enabledTrack && t.enabled) {
-          enabledTrack = t;
-        }
-      });
-
-      // they did not switch audiotracks
-      // blacklist the current playlist
-      if (!enabledTrack.getLoader(this.activeAudioGroup_())) {
-        error = `The rendition that we tried to switch to ${error}` +
-                'Unfortunately that means we will have to blacklist ' +
-                'the current playlist and switch to another. Sorry!';
-        this.masterPlaylistController_.blacklistCurrentPlaylist();
-      } else {
-        error = `The audio track '${enabledTrack.label}' that we tried to ` +
-                `switch to ${error} Unfortunately this means we will have to ` +
-                `return you to the main track '${defaultTrack.label}'. Sorry!`;
-        defaultTrack.enabled = true;
-        this.tech_.audioTracks().removeTrack(enabledTrack);
-      }
-
-      videojs.log.warn(error);
-      this.masterPlaylistController_.useAudio();
-    });
     this.masterPlaylistController_.on('selectedinitialmedia', () => {
-      // clear current audioTracks
-      this.tech_.clearTracks('audio');
-      this.masterPlaylistController_.audioTracks_.forEach((track) => {
-        this.tech_.audioTracks().addTrack(track);
-      });
-
       // Add the manual rendition mix-in to HlsHandler
       renditionSelectionMixin(this);
+    });
+
+    this.masterPlaylistController_.on('audioupdate', () => {
+      // clear current audioTracks
+      this.tech_.clearTracks('audio');
+      this.masterPlaylistController_.activeAudioGroup().forEach((audioTrack) => {
+        this.tech_.audioTracks().addTrack(audioTrack);
+      });
     });
 
     // the bandwidth of the primary segment loader is our best
     // estimate of overall bandwidth
     this.on(this.masterPlaylistController_, 'progress', function() {
-      this.bandwidth = this.masterPlaylistController_.mainSegmentLoader_.bandwidth;
       this.tech_.trigger('progress');
+    });
+
+    // In the live case, we need to ignore the very first `seeking` event since
+    // that will be the result of the seek-to-live behavior
+    this.on(this.masterPlaylistController_, 'firstplay', function() {
+      this.ignoreNextSeekingEvent_ = true;
     });
 
     // do nothing if the tech has been disposed already
@@ -549,10 +564,12 @@ class HlsHandler extends Component {
   * Abort all outstanding work and cleanup.
   */
   dispose() {
+    if (this.playbackWatcher_) {
+      this.playbackWatcher_.dispose();
+    }
     if (this.masterPlaylistController_) {
       this.masterPlaylistController_.dispose();
     }
-    this.gapSkipper_.dispose();
     this.tech_.audioTracks().removeEventListener('change', this.audioTrackChange_);
     super.dispose();
   }
@@ -678,7 +695,7 @@ HlsSourceHandler.canPlayType = function(type, options) {
   let mpegurlRE = /^(audio|video|application)\/(x-|vnd\.apple\.)?mpegurl/i;
 
   // favor native HLS support if it's available
-  if (Hls.supportsNativeHls && !options.avoidNative) {
+  if (!videojs.options.hls.overrideNative && Hls.supportsNativeHls) {
     return false;
   }
   return mpegurlRE.test(type);
@@ -692,7 +709,7 @@ if (typeof videojs.MediaSource === 'undefined' ||
 
 // register source handlers with the appropriate techs
 if (MediaSource.supportsNativeMediaSources()) {
-  videojs.getComponent('Html5').registerSourceHandler(HlsSourceHandler('html5'));
+  videojs.getComponent('Html5').registerSourceHandler(HlsSourceHandler('html5'), 0);
 }
 if (window.Uint8Array) {
   videojs.getComponent('Flash').registerSourceHandler(HlsSourceHandler('flash'));
@@ -704,6 +721,7 @@ videojs.Hls = Hls;
 videojs.m3u8 = m3u8;
 videojs.registerComponent('Hls', Hls);
 videojs.options.hls = videojs.options.hls || {};
+videojs.plugin('reloadSourceOnError', reloadSourceOnError);
 
 module.exports = {
   Hls,

@@ -97,6 +97,9 @@ const updateMaster = function(master, media) {
         if (segment.key && !segment.key.resolvedUri) {
           segment.key.resolvedUri = resolveUrl(playlist.resolvedUri, segment.key.uri);
         }
+        if (segment.map && !segment.map.resolvedUri) {
+          segment.map.resolvedUri = resolveUrl(playlist.resolvedUri, segment.map.uri);
+        }
       }
       changed = true;
     }
@@ -126,10 +129,6 @@ const PlaylistLoader = function(srcUrl, hls, withCredentials) {
   PlaylistLoader.prototype.constructor.call(this);
 
   this.hls_ = hls;
-
-  // a flag that disables "expired time"-tracking this setting has
-  // no effect when not playing a live stream
-  this.trackExpiredTime_ = false;
 
   if (!srcUrl) {
     throw new Error('A non-empty playlist URL is required');
@@ -181,7 +180,7 @@ const PlaylistLoader = function(srcUrl, hls, withCredentials) {
     loader.targetDuration = parser.manifest.targetDuration;
     if (update) {
       loader.master = update;
-      loader.updateMediaPlaylist_(parser.manifest);
+      loader.media_ = loader.master.playlists[parser.manifest.uri];
     } else {
       // if the playlist is unchanged since the last reload,
       // try again after half the target duration
@@ -201,11 +200,6 @@ const PlaylistLoader = function(srcUrl, hls, withCredentials) {
 
   // initialize the loader state
   loader.state = 'HAVE_NOTHING';
-
-  // track the time that has expired from the live window
-  // this allows the seekable start range to be calculated even if
-  // all segments with timing information have expired
-  this.expired_ = 0;
 
   // capture the prototype dispose function
   dispose = this.dispose;
@@ -246,23 +240,28 @@ const PlaylistLoader = function(srcUrl, hls, withCredentials) {
    * @return {Boolean} true if on lowest rendition
    */
   loader.isLowestEnabledRendition_ = function() {
-    if (!loader.media()) {
+    let media = loader.media();
+
+    if (!media || !media.attributes) {
       return false;
     }
 
-    let currentPlaylist = loader.media().attributes.BANDWIDTH;
+    let currentBandwidth = loader.media().attributes.BANDWIDTH || 0;
 
-    return !(loader.master.playlists.filter((element, index, array) => {
-      let enabled = typeof element.excludeUntil === 'undefined' ||
-                      element.excludeUntil <= Date.now();
+    return !(loader.master.playlists.filter((playlist) => {
+      let enabled = typeof playlist.excludeUntil === 'undefined' ||
+                      playlist.excludeUntil <= Date.now();
 
       if (!enabled) {
         return false;
       }
 
-      let item = element.attributes.BANDWIDTH;
+      let bandwidth = 0;
 
-      return item <= currentPlaylist;
+      if (playlist && playlist.attributes) {
+        bandwidth = playlist.attributes.BANDWIDTH;
+      }
+      return bandwidth <= currentBandwidth;
 
     }).length > 1);
   };
@@ -377,12 +376,6 @@ const PlaylistLoader = function(srcUrl, hls, withCredentials) {
     loader.bandwidth = xhr.bandwidth;
   };
 
-  // In a live playlist, don't keep track of the expired time
-  // until HLS tells us that "first play" has commenced
-  loader.on('firstplay', function() {
-    this.trackExpiredTime_ = true;
-  });
-
   // live playlist staleness timeout
   loader.on('mediaupdatetimeout', function() {
     if (loader.state !== 'HAVE_METADATA') {
@@ -405,6 +398,18 @@ const PlaylistLoader = function(srcUrl, hls, withCredentials) {
       }
       haveMetadata(request, loader.media().uri);
     });
+  });
+
+  // setup initial sync info
+  loader.on('firstplay', function() {
+    let playlist = loader.media();
+
+    if (playlist) {
+      playlist.syncInfo = {
+        mediaSequence: playlist.mediaSequence,
+        time: 0
+      };
+    }
   });
 
   /**
@@ -511,6 +516,12 @@ const PlaylistLoader = function(srcUrl, hls, withCredentials) {
       // loaded a media playlist
       // infer a master playlist if none was previously requested
       loader.master = {
+        mediaGroups: {
+          'AUDIO': {},
+          'VIDEO': {},
+          'CLOSED-CAPTIONS': {},
+          'SUBTITLES': {}
+        },
         uri: window.location.href,
         playlists: [{
           uri: srcUrl
@@ -525,74 +536,5 @@ const PlaylistLoader = function(srcUrl, hls, withCredentials) {
 };
 
 PlaylistLoader.prototype = new Stream();
-
- /**
-  * Update the PlaylistLoader state to reflect the changes in an
-  * update to the current media playlist.
-  *
-  * @param {Object} update the updated media playlist object
-  */
-PlaylistLoader.prototype.updateMediaPlaylist_ = function(update) {
-  let outdated;
-  let i;
-  let segment;
-
-  outdated = this.media_;
-  this.media_ = this.master.playlists[update.uri];
-
-  if (!outdated) {
-    return;
-  }
-
-  // don't track expired time until this flag is truthy
-  if (!this.trackExpiredTime_) {
-    return;
-  }
-
-  // if the update was the result of a rendition switch do not
-  // attempt to calculate expired_ since media-sequences need not
-  // correlate between renditions/variants
-  if (update.uri !== outdated.uri) {
-    return;
-  }
-
-  // try using precise timing from first segment of the updated
-  // playlist
-  if (update.segments.length) {
-    if (typeof update.segments[0].start !== 'undefined') {
-      this.expired_ = update.segments[0].start;
-      return;
-    } else if (typeof update.segments[0].end !== 'undefined') {
-      this.expired_ = update.segments[0].end - update.segments[0].duration;
-      return;
-    }
-  }
-
-  // calculate expired by walking the outdated playlist
-  i = update.mediaSequence - outdated.mediaSequence - 1;
-
-  for (; i >= 0; i--) {
-    segment = outdated.segments[i];
-
-    if (!segment) {
-      // we missed information on this segment completely between
-      // playlist updates so we'll have to take an educated guess
-      // once we begin buffering again, any error we introduce can
-      // be corrected
-      this.expired_ += outdated.targetDuration || 10;
-      continue;
-    }
-
-    if (typeof segment.end !== 'undefined') {
-      this.expired_ = segment.end;
-      return;
-    }
-    if (typeof segment.start !== 'undefined') {
-      this.expired_ = segment.start + segment.duration;
-      return;
-    }
-    this.expired_ += segment.duration;
-  }
-};
 
 export default PlaylistLoader;
